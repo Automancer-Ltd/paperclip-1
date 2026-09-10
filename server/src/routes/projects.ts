@@ -17,7 +17,7 @@ import type { WorkspaceRuntimeDesiredState, WorkspaceRuntimeServiceStateMap } fr
 import { trackProjectCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import { accessService, projectService, logActivity, workspaceOperationService } from "../services/index.js";
-import { conflict, forbidden, unprocessable } from "../errors.js";
+import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { externalObjectService } from "../services/external-objects.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo } from "./authz.js";
@@ -122,12 +122,13 @@ export function projectRoutes(db: Db) {
   async function normalizeProjectReference(req: Request, rawId: string) {
     if (isUuidLike(rawId)) return rawId;
     const companyId = await resolveCompanyIdForProjectReference(req);
-    if (!companyId) return rawId;
+    if (!companyId) throw notFound("Project not found");
     const resolved = await svc.resolveByReference(companyId, rawId);
     if (resolved.ambiguous) {
       throw conflict("Project shortname is ambiguous in this company. Use the project ID.");
     }
-    return resolved.project?.id ?? rawId;
+    if (!resolved.project) throw notFound("Project not found");
+    return resolved.project.id;
   }
 
   async function assertProjectReadAllowed(req: Request, res: Response, project: { id: string; companyId: string }) {
