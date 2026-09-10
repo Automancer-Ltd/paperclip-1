@@ -696,6 +696,31 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
   }
 
   if (existingState?.currentStageId && !currentStage) {
+    // The stored stage id no longer resolves against the (possibly just
+    // replaced) policy — e.g. the caller PATCHed a brand-new executionPolicy
+    // in the same request that regenerated stage ids. If a review cycle is
+    // genuinely live (pending, or awaiting the assignee's response to
+    // changes requested) and the caller also asked for a status change here,
+    // we must not let clearExecutionStatePatch silently drop the cycle and
+    // let the requested status stand — that would let `done` through a
+    // review that was never actually completed (#AUT-7902). A bare policy
+    // edit with no requested status still falls through to the normal
+    // clear/return-to-executor behavior below, since there is no status to
+    // smuggle through.
+    const hasLiveReviewCycle =
+      existingState.status === PENDING_STATUS || existingState.status === CHANGES_REQUESTED_STATUS;
+    if (hasLiveReviewCycle && requestedStatus !== undefined) {
+      if (requestedStatus === "done") {
+        throw unprocessable(
+          "This issue has an unexecuted review stage from a live review cycle. Resolve the review before marking it done.",
+          { code: "unexecuted_review_stage" },
+        );
+      }
+      throw unprocessable(
+        "The execution policy was replaced while a review cycle is active; this would discard the live review stage.",
+        { code: "execution_policy_replaced_during_active_cycle" },
+      );
+    }
     clearExecutionStatePatch({
       patch,
       issueStatus: input.issue.status,

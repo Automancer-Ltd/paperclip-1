@@ -1629,6 +1629,139 @@ describe("issue execution policy transitions", () => {
     });
   });
 
+  describe("replacing executionPolicy mid-cycle must not discard a live review (#AUT-7902)", () => {
+    it("rejects done when a new executionPolicy regenerates the stage id during changes_requested", () => {
+      const originalPolicy = twoStagePolicy();
+      const replacementPolicy = twoStagePolicy();
+
+      expect(() =>
+        applyIssueExecutionPolicyTransition({
+          issue: {
+            status: "in_progress",
+            assigneeAgentId: coderAgentId,
+            assigneeUserId: null,
+            executionPolicy: originalPolicy,
+            executionState: {
+              status: "changes_requested",
+              currentStageId: originalPolicy.stages[0].id,
+              currentStageIndex: 0,
+              currentStageType: "review",
+              currentParticipant: { type: "agent", agentId: qaAgentId },
+              returnAssignee: { type: "agent", agentId: coderAgentId },
+              completedStageIds: [],
+              lastDecisionId: null,
+              lastDecisionOutcome: "changes_requested",
+            },
+          },
+          // A brand-new policy object has freshly generated stage ids, so the
+          // stored currentStageId from the live review no longer resolves.
+          policy: replacementPolicy,
+          requestedStatus: "done",
+          requestedAssigneePatch: {},
+          actor: { agentId: coderAgentId },
+        }),
+      ).toThrow(expect.objectContaining({ status: 422, details: { code: "unexecuted_review_stage" } }));
+    });
+
+    it("rejects a non-done status change too, so the cycle is never silently discarded", () => {
+      const originalPolicy = twoStagePolicy();
+      const replacementPolicy = twoStagePolicy();
+
+      expect(() =>
+        applyIssueExecutionPolicyTransition({
+          issue: {
+            status: "in_review",
+            assigneeAgentId: qaAgentId,
+            assigneeUserId: null,
+            executionPolicy: originalPolicy,
+            executionState: {
+              status: "pending",
+              currentStageId: originalPolicy.stages[0].id,
+              currentStageIndex: 0,
+              currentStageType: "review",
+              currentParticipant: { type: "agent", agentId: qaAgentId },
+              returnAssignee: { type: "agent", agentId: coderAgentId },
+              completedStageIds: [],
+              lastDecisionId: null,
+              lastDecisionOutcome: null,
+            },
+          },
+          policy: replacementPolicy,
+          requestedStatus: "cancelled",
+          requestedAssigneePatch: {},
+          actor: { agentId: qaAgentId },
+        }),
+      ).toThrow(expect.objectContaining({ status: 422, details: { code: "execution_policy_replaced_during_active_cycle" } }));
+    });
+
+    it("still allows a bare status: done to route to the stored reviewer when the policy is unchanged", () => {
+      const policy = twoStagePolicy();
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_progress",
+          assigneeAgentId: coderAgentId,
+          assigneeUserId: null,
+          executionPolicy: policy,
+          executionState: {
+            status: "changes_requested",
+            currentStageId: policy.stages[0].id,
+            currentStageIndex: 0,
+            currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: qaAgentId },
+            returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: "changes_requested",
+          },
+        },
+        policy,
+        requestedStatus: "done",
+        requestedAssigneePatch: {},
+        actor: { agentId: coderAgentId },
+      });
+
+      expect(result.patch).toMatchObject({
+        status: "in_review",
+        assigneeAgentId: qaAgentId,
+      });
+    });
+
+    it("still allows a policy edit with no requested status to clear the orphaned stage and return to the executor", () => {
+      const originalPolicy = twoStagePolicy();
+      const replacementPolicy = twoStagePolicy();
+
+      const result = applyIssueExecutionPolicyTransition({
+        issue: {
+          status: "in_review",
+          assigneeAgentId: qaAgentId,
+          assigneeUserId: null,
+          executionPolicy: originalPolicy,
+          executionState: {
+            status: "pending",
+            currentStageId: originalPolicy.stages[0].id,
+            currentStageIndex: 0,
+            currentStageType: "review",
+            currentParticipant: { type: "agent", agentId: qaAgentId },
+            returnAssignee: { type: "agent", agentId: coderAgentId },
+            completedStageIds: [],
+            lastDecisionId: null,
+            lastDecisionOutcome: null,
+          },
+        },
+        policy: replacementPolicy,
+        requestedStatus: undefined,
+        requestedAssigneePatch: {},
+        actor: { agentId: qaAgentId },
+      });
+
+      expect(result.patch).toMatchObject({
+        status: "in_progress",
+        assigneeAgentId: coderAgentId,
+        executionState: null,
+      });
+    });
+  });
+
   describe("monitor policy", () => {
     it("schedules a one-shot monitor on an active agent-owned issue", () => {
       const policy = normalizeIssueExecutionPolicy({
