@@ -1663,6 +1663,37 @@ describe("issue execution policy transitions", () => {
       ).toThrow(expect.objectContaining({ status: 422, details: { code: "unexecuted_review_stage" } }));
     });
 
+    it("rejects done when a new executionPolicy regenerates the stage id during a pending review", () => {
+      const originalPolicy = twoStagePolicy();
+      const replacementPolicy = twoStagePolicy();
+
+      expect(() =>
+        applyIssueExecutionPolicyTransition({
+          issue: {
+            status: "in_review",
+            assigneeAgentId: qaAgentId,
+            assigneeUserId: null,
+            executionPolicy: originalPolicy,
+            executionState: {
+              status: "pending",
+              currentStageId: originalPolicy.stages[0].id,
+              currentStageIndex: 0,
+              currentStageType: "review",
+              currentParticipant: { type: "agent", agentId: qaAgentId },
+              returnAssignee: { type: "agent", agentId: coderAgentId },
+              completedStageIds: [],
+              lastDecisionId: null,
+              lastDecisionOutcome: null,
+            },
+          },
+          policy: replacementPolicy,
+          requestedStatus: "done",
+          requestedAssigneePatch: {},
+          actor: { agentId: qaAgentId },
+        }),
+      ).toThrow(expect.objectContaining({ status: 422, details: { code: "unexecuted_review_stage" } }));
+    });
+
     it("lets a board cancellation through: the live cycle is abandoned, not claimed complete", () => {
       const originalPolicy = twoStagePolicy();
       const replacementPolicy = twoStagePolicy();
